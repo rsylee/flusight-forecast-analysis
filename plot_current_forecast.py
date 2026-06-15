@@ -1,52 +1,14 @@
 """
-plot_current_forecast.py
+Plot current-week UM-DeepOutbreak flu hospitalization forecasts.
+The plot shows CDC observed truth on the left and the latest forecast quantiles
+on the right, separated by the forecast reference date.
 
-Generates a "current-week forecast" plot for UM-DeepOutbreak / CDC FluSight.
+Inputs:
+    - cdc_datafiles.csv
+    - latest *-UM-DeepOutbreak.csv file
 
-Plot layout
------------
-LEFT  (history)  : observed ground truth only, up to the last available week
-RIGHT (forecast) : current-week forecast quantiles only (no historical predictions) 
-SEPARATOR        : vertical dashed line at the forecast origin -- reference_date
-
-Quantile bands shown (if the quantiles are present in the submission CSV):
-  - 50%  PI  : 0.25 – 0.75
-  - 80%  PI  : 0.10 – 0.90
-  - 95%  PI  : 0.025 – 0.975
-  - Median   : 0.50 (solid line)
-
-Data sources
-------------
-- Ground truth  : cdc_datafiles.csv   (CDC-observed, latest revision per week) -- plotted on left side since they are true/real/verified data from CDC
-- Forecast      : latest *-UM-DeepOutbreak.csv in forecast_dir (or --forecast_file) -- plotted on the right side as these are prediction
-
-How the history / forecast split is determined
------------------------------------------------
-1. The latest submission CSV is selected (alphabetically last filename, which equals the most recent date because filenames are YYYY-MM-DD-…).
-2. reference_date = max(reference_date) in that file = the forecast origin.
-3. Truth is shown for all weeks whose target_end_date <= last observed truth date
-   AND within the requested --history_weeks window.
-4. Forecast is shown for all target_end_dates in the submission (horizons 0–4 by default).
-
-Usage examples
---------------
-# All locations, auto-detect latest submission, save to datafiles/
-python3 plot_current_forecast.py
-
-# Single location by FIPS code
-python3 plot_current_forecast.py --locations 26
-
-# Specific submission file
-python3 plot_current_forecast.py --forecast_file 2026-02-21-UM-DeepOutbreak.csv
-
-# Only horizons 1-4 (skip nowcast)
-python3 plot_current_forecast.py --horizons 1,2,3,4
-
-# Custom output directory
-python3 plot_current_forecast.py --output_dir /tmp/fc_plots
-
-Requirements:
-pip install pandas numpy matplotlib epiweeks
+Output:
+    - PNG forecast plot(s) by location
 """
 
 import argparse
@@ -68,7 +30,7 @@ DEFAULT_TARGET = "wk inc flu hosp"
 DEFAULT_HISTORY_WEEKS = 52          # weeks of truth to show before forecast origin
 DEFAULT_HORIZONS = [0, 1, 2, 3, 4]  # which horizons to include in the forecast plot
 
-# Quantile interval definitions  (low, high, nominal coverage, display label, alpha)
+# quantile interval definitions  (low, high, nominal coverage, display label, alpha)
 QUANTILE_BANDS = [
     (0.025, 0.975, "95% PI (0.025–0.975)", 0.12),
     (0.10,  0.90,  "80% PI (0.10–0.90)",   0.20),
@@ -77,18 +39,15 @@ QUANTILE_BANDS = [
 MEDIAN_QUANTILE = 0.50
 
 
-# Helper fucntions
-def zfill_loc(x) -> str: # -> str is just for explanation (doesn't do any work; just telling us that it will return a string)
-    """Zero-pad location FIPS codes to 2 digits (e.g. 1 -> '01'); zfill = zero fill"""
+# helper fucntions
+def zfill_loc(x) -> str:
     return str(x).zfill(2)
 
 def ensure_datetime(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Convert a column to datetime; invalid parses become NaT."""
     df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
 
 def ensure_numeric(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Convert a column to numeric; invalid parses become NaN."""
     df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
@@ -117,11 +76,10 @@ def pick_latest_submission(forecast_dir: str, glob_pattern: str) -> str:
     return latest
 
 
-# Data loading
+# data loading
 def load_truth(truth_path: str, target: str) -> pd.DataFrame:
     """
     Load and clean the CDC ground-truth CSV.
-
     Returns a DataFrame indexed by (location, target_end_date) with columns
     [observation, location_name].  Duplicate revisions are resolved by keeping
     the row with the latest as_of.
@@ -131,7 +89,7 @@ def load_truth(truth_path: str, target: str) -> pd.DataFrame:
 
     truth = pd.read_csv(truth_path) # create DataFrame while reading csv (cdc_datafiles.csv)
 
-    # Normalise column names (some exports use spaces)
+    # normalize column names (some exports use spaces)
     truth = truth.rename(columns={"as of": "as_of", "target end date": "target_end_date"})
 
     required = {"target", "location_name", "target_end_date", "observation"}
@@ -144,14 +102,14 @@ def load_truth(truth_path: str, target: str) -> pd.DataFrame:
     truth = ensure_datetime(truth, "target_end_date")
     truth = ensure_numeric(truth, "observation")
 
-    # Keep only the target we care about
+    # keep only the target we care about
     truth = truth[truth["target"] == target].copy()
 
-    # Zero-pad location codes so they match submission CSVs
+    # zero-pad location codes so they match submission CSVs
     if "location" in truth.columns:
         truth["location"] = truth["location"].apply(zfill_loc)
 
-    # Deduplicate: keep latest revision (max as_of) per (location, target_end_date)
+    # deduplicate: keep latest revision (max as_of) per (location, target_end_date)
     if "as_of" in truth.columns:
         truth = (
             truth
@@ -159,7 +117,7 @@ def load_truth(truth_path: str, target: str) -> pd.DataFrame:
             .drop_duplicates(subset=["location", "target_end_date"], keep="last")
         )
     else:
-        # Fallback: average duplicate observations
+        # fallback: average duplicate observations
         truth = (
             truth
             .groupby(["location", "target_end_date", "location_name"], as_index=False)["observation"]
@@ -172,7 +130,6 @@ def load_truth(truth_path: str, target: str) -> pd.DataFrame:
 def load_forecast(forecast_file: str, target: str, horizons: list[int]) -> pd.DataFrame:
     """
     Load and clean a single submission CSV.
-
     Returns a long-format DataFrame with columns:
         reference_date, target_end_date, horizon, location, output_type_id, value
     filtered to the requested target and horizons.
@@ -196,7 +153,7 @@ def load_forecast(forecast_file: str, target: str, horizons: list[int]) -> pd.Da
     pred = ensure_numeric(pred, "value")
     pred["location"] = pred["location"].apply(zfill_loc)
 
-    # Keep only quantile output for our target
+    # keep only quantile output for our target
     pred = pred[
         (pred["target"] == target) &
         (pred["output_type"] == "quantile")
@@ -208,7 +165,7 @@ def load_forecast(forecast_file: str, target: str, horizons: list[int]) -> pd.Da
             f"Targets present: {pred['target'].unique().tolist()}"
         )
 
-    # Compute horizon from dates (overrides any existing column, ensures consistency)
+    # compute horizon from dates (overrides any existing column, ensures consistency)
     delta_days = (pred["target_end_date"] - pred["reference_date"]).dt.days
     pred["horizon"] = (delta_days // 7).astype("Int64")
 
@@ -219,7 +176,7 @@ def load_forecast(forecast_file: str, target: str, horizons: list[int]) -> pd.Da
             f"Horizons present: {sorted(pred['horizon'].dropna().unique().tolist())}"
         )
 
-    # Use the single reference_date (latest in the file, in case file has multiple)
+    # use the single reference_date (latest in the file, in case file has multiple)
     ref_date = pred["reference_date"].max()
     print(f"[INFO] Forecast reference_date (origin): {ref_date.date()}")
     pred = pred[pred["reference_date"] == ref_date].copy()
@@ -227,7 +184,7 @@ def load_forecast(forecast_file: str, target: str, horizons: list[int]) -> pd.Da
     return pred, ref_date
 
 
-# Plotting
+# plotting
 def plot_location_forecast(
     loc_code: str,
     loc_name: str,
@@ -280,7 +237,7 @@ def plot_location_forecast(
     # 3) Build figure (fig = canvas; ax = an area for drawing a graph)
     fig, ax = plt.subplots(figsize=(13, 5))
 
-    # Historical ground truth (left side)
+    # historical ground truth (left side)
     ax.plot(
         truth_plot.index, # x-axis
         truth_plot["observation"], # y-axis
@@ -293,7 +250,7 @@ def plot_location_forecast(
         zorder=3,
     )
 
-    # Optional: draw a thin connector from the last truth point to the first
+    # draw a thin connector from the last truth point to the first
     # forecast point so the visual story is continuous.
     first_fc_date = q.index.min()
     last_truth_val = truth_plot["observation"].iloc[-1]
@@ -309,7 +266,7 @@ def plot_location_forecast(
             zorder=2,
         )
 
-    # Forecast quantile bands (right side, widest first → narrowest on top)
+    # forecast quantile bands (right side, widest first → narrowest on top)
     available_bands = []
     for (lo, hi, label, alpha) in QUANTILE_BANDS:
         lo_s = get_q(lo)
@@ -328,7 +285,7 @@ def plot_location_forecast(
         else:
             print(f"  [INFO] Quantiles {lo}–{hi} not available; skipping that band.")
 
-    # Forecast median line (from reference date)
+    # forecast median line (from reference date)
     ax.plot(
         q.index,
         get_q(MEDIAN_QUANTILE).values,
@@ -341,7 +298,7 @@ def plot_location_forecast(
         zorder=4,
     )
 
-    # Vertical separator at forecast origin
+    # vertical separator at forecast origin
     ax.axvline(
         ref_date,
         color="black",
@@ -353,7 +310,7 @@ def plot_location_forecast(
     )
 
     # 4) Axes cosmetics
-    # Build unified x-tick positions: evenly spaced across the full date range
+    # build unified x-tick positions: evenly spaced across the full date range
     all_dates = truth_plot.index.tolist() + q.index.tolist()
     all_dates_sorted = sorted(set(all_dates))
     step = max(1, len(all_dates_sorted) // 14)  # at most ~14 ticks
@@ -381,7 +338,7 @@ def plot_location_forecast(
         right=q.index.max() + pd.Timedelta(days=7),
     )
 
-    # Ensure y-axis starts at 0 (hospitalization counts can't be negative)
+    # ensure y-axis starts at 0 (hospitalization counts can't be negative)
     ymin, ymax = ax.get_ylim()
     ax.set_ylim(bottom=max(0, ymin), top=ymax * 1.05)
 
@@ -451,7 +408,7 @@ def main():
     args = parse_args()
     print("cwd:", os.getcwd())
 
-    # Parse horizons
+    # parse horizons
     try:
         horizons = [int(h.strip()) for h in args.horizons.split(",")]
     except ValueError:
@@ -461,7 +418,7 @@ def main():
     print(f"\n[INFO] Loading truth from: {args.truth_path}")
     truth = load_truth(args.truth_path, args.target)
 
-    # Build location-code -> name mapping (needed to join truth to forecast)
+    # build location-code -> name mapping (needed to join truth to forecast)
     loc_map = (
         truth[["location", "location_name"]]
         .dropna()
@@ -500,14 +457,14 @@ def main():
         loc_name = loc_map.get(loc_code, loc_code)
         print(f"  Processing: {loc_name} ({loc_code})")
 
-        # Truth for this location (indexed by target_end_date)
+        # truth for this location (indexed by target_end_date)
         truth_loc = truth[truth["location"] == loc_code].copy()
         if truth_loc.empty:
             print(f"    [WARN] No truth rows for location {loc_code}; skipping.")
             continue
         truth_loc = truth_loc.sort_values("target_end_date").set_index("target_end_date")
 
-        # Forecast for this location
+        # forecast for this location
         pred_loc = pred[pred["location"] == loc_code].copy()
         if pred_loc.empty:
             print(f"    [WARN] No forecast rows for location {loc_code}; skipping.")
