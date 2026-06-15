@@ -1,45 +1,17 @@
 #!/usr/bin/env python3
 """
-numeric_eval_by_horizon.py
+- Evaluate UM-DeepOutbreak influenza hospitalization forecasts by horizon.
+- Compares probabilistic forecast submission files with CDC observed
+hospitalization data and computes numeric evaluation metrics, including MAE,
+RMSE, 90% prediction interval coverage, mean interval width, and WIS.
 
-Computes numeric evaluation metrics for UM-DeepOutbreak flu hospitalization forecasts
-by forecast horizon, matched against CDC observed ground-truth data.
+Inputs:
+    - Forecast submission CSV files matching *-UM-DeepOutbreak.csv
+    - CDC observed truth file: cdc_datafiles.csv
 
-Truth source:
-    cdc_datafiles.csv  (same file used by pred_vs_truth_epiweeks.py)
-    Deduplication: latest as_of revision kept per (location, target_end_date).
-    Location matching: submission FIPS code -> truth location_name via loc_mapping.
-
-Metrics (per horizon, across all matched forecast-truth pairs):
-    n             : number of forecast-truth pairs with observed truth
-    mae           : Mean Absolute Error using median (q0.5) forecast
-    rmse          : Root Mean Square Error using median forecast
-    coverage_90   : Fraction of truth values within 90% PI [q0.05, q0.95]
-    mean_width_90 : Mean width of the 90% PI
-    wis           : Mean Weighted Interval Score (Bracher et al. 2021)
-
-Weighted Interval Score (WIS) — implementation notes:
-    WIS(F, y) = (1 / (K + 0.5)) * [ 0.5 * |y - m|  +  sum_k (alpha_k/2 * IS_alpha_k(l_k, u_k, y)) ]
-
-    where:
-        m        = median forecast (quantile 0.5)
-        K        = number of central interval pairs used
-        alpha_k  = nominal miscoverage of the k-th interval (e.g. 0.10 for a 90% PI)
-        IS_alpha = (u - l) + (2/alpha)*max(l - y, 0) + (2/alpha)*max(y - u, 0)
-
-    Pairs used (any subset present in the submission files):
-        (0.01, 0.99, alpha=0.02), (0.025, 0.975, 0.05), (0.05, 0.95, 0.10),
-        (0.10, 0.90, 0.20), (0.15, 0.85, 0.30), (0.20, 0.80, 0.40),
-        (0.25, 0.75, 0.50), (0.30, 0.70, 0.60), (0.35, 0.65, 0.70),
-        (0.40, 0.60, 0.80), (0.45, 0.55, 0.90)
-
-    Missing interval endpoints are skipped (graceful degradation).
-    If only the median is present, WIS = |y - m| (K=0 edge case).
-
-Usage:
-    python numeric_eval_by_horizon.py [--forecast_dir ./datafiles] [--horizons 1,2,3] ...
-
-Run from the project root directory.
+Outputs:
+    - Horizon-level summary CSV
+    - Row-level detailed evaluation CSV
 """
 import os
 import glob
@@ -47,9 +19,7 @@ import argparse
 import numpy as np
 import pandas as pd
 
-# Standard CDC FluSight symmetric interval pairs:
-# (lower_quantile, upper_quantile, alpha=nominal_miscoverage)
-# alpha = 1 - nominal_coverage  (e.g., 0.10 for a 90% PI)
+# quantile interval pairs for computing WIS across different PI coverage levels
 CDC_INTERVAL_PAIRS = [
     (0.01, 0.99, 0.02),
     (0.025, 0.975, 0.05),
@@ -64,51 +34,25 @@ CDC_INTERVAL_PAIRS = [
     (0.45, 0.55, 0.90),
 ]
 
-# Helper functions
-def zfill_loc(x) -> str:
-    """Zero-pad a location FIPS code to 2 digits (e.g., '1' -> '01')."""
+# helper functions
+def zfill_loc(x):
     return str(x).zfill(2)
 
-def ensure_datetime(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Convert column to datetime; unparseable values become NaT."""
+def ensure_datetime(df: pd.DataFrame, col: str):
     df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
 
-def ensure_numeric(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Convert column to float; unparseable values become NaN."""
-    df[col] = pd.to_numeric(df[col], errors="coerce")
+def ensure_numeric(df: pd.DataFrame, col: str):
+    df[col] = pd.to_numeric(df[col], errors="coerce") # col to numeric
     return df
 
-def compute_horizon(pred: pd.DataFrame) -> pd.DataFrame:
-    """
-    Derive forecast horizon (weeks ahead) as:
-        horizon = floor((target_end_date - reference_date) / 7)
-
-    Identical to the formula used in pred_vs_truth_epiweeks.py.
-    The horizon column in the submission file is used directly if present,
-    but recomputing from dates is more robust (guards against off-by-one).
-    """
+def compute_horizon(pred: pd.DataFrame):
     delta_days = (pred["target_end_date"] - pred["reference_date"]).dt.days
     pred["horizon"] = (delta_days // 7).astype("Int64")
     return pred
 
 # WIS
-def interval_score(l, u, alpha, y):
-    """
-    Compute the Interval Score for a single prediction interval.
-
-    IS_alpha(l, u, y) = (u - l)
-                        + (2/alpha) * max(l - y, 0)   <- penalise undershoot
-                        + (2/alpha) * max(y - u, 0)   <- penalise overshoot
-
-    Parameters
-    ----------
-    l, u  : lower/upper bound (scalar or numpy array)
-    alpha : miscoverage level (e.g. 0.10 for 90% PI)
-    y     : observed truth
-
-    Returns scalar or array of the same shape as inputs.
-    """
+def interval_score(l, u, alpha, y): # for a single prediction interval
     return (
         (u - l)
         + (2.0 / alpha) * np.maximum(l - y, 0.0)
@@ -117,61 +61,44 @@ def interval_score(l, u, alpha, y):
 
 def compute_wis_row(row_quantiles: dict, truth: float):
     """
-    Compute the Weighted Interval Score for a single forecast-truth pair.
-
-    Formula (Bracher et al. 2021, doi:10.1371/journal.pcbi.1009094):
-        WIS = (1 / (K + 0.5)) * [ 0.5 * |y - m|  +  sum_{k=1}^{K} (alpha_k/2) * IS_alpha_k ]
-
-    Parameters
-    ----------
-    row_quantiles : dict  {quantile_float -> predicted_value}
-    truth         : observed value (float)
-
-    Returns
-    -------
-    WIS (float) or None if the median is unavailable.
+    WIS: median prediction error + prediction interval performance
+    - lower WIS means better forecast quality
+    - so this one computes WIS for one forecast row by combining median error with 
+      interval scores from all available prediction intervals
     """
     if 0.5 not in row_quantiles or np.isnan(row_quantiles[0.5]):
-        return None
+        return None # no median forecast
 
     median_pred = row_quantiles[0.5]
     median_term = 0.5 * abs(truth - median_pred)
-
     interval_terms = []
     for (lq, uq, alpha) in CDC_INTERVAL_PAIRS:
         l_val = row_quantiles.get(lq)
         u_val = row_quantiles.get(uq)
+
         if l_val is None or u_val is None:
             continue
         if np.isnan(l_val) or np.isnan(u_val):
             continue
+
         w_k = alpha / 2.0
         interval_terms.append(w_k * interval_score(l_val, u_val, alpha, truth))
 
     K = len(interval_terms)
     if K == 0:
-        # Only median available: WIS degenerates to |y - m|
-        # (K + 0.5 = 0.5, and the whole formula collapses to |y - m|)
+        # if no intervals are available, use absolute median error
         return median_term / 0.5
 
     return (1.0 / (K + 0.5)) * (median_term + sum(interval_terms))
 
-# Data loading
-def load_truth(truth_path: str):
+# data loading
+def load_truth(truth_path):
     """
     Load CDC ground-truth and build a location code->name mapping.
-
-    Deduplication:
-        If as_of is present, keep the latest revision per (location, target_end_date).
-        Otherwise average duplicates.  Same logic as pred_vs_truth_epiweeks.py.
-
-    Returns
-    -------
-    truth      : cleaned DataFrame
-    loc_mapping: dict {fips_str -> location_name_str}
+    Returns truth (cleaned DataFrame) and loc_mapping (dict {fips_str -> location_name_str})
     """
     if not os.path.exists(truth_path):
-        raise FileNotFoundError(f"Truth file not found: {truth_path}")
+        raise FileNotFoundError(f"truth file not found: {truth_path}")
 
     truth = pd.read_csv(truth_path)
     # Handle column name variants (space vs underscore)
@@ -207,8 +134,6 @@ def load_truth(truth_path: str):
 def get_truth_lookup(truth: pd.DataFrame, target: str, loc_mapping: dict) -> pd.DataFrame:
     """
     Build a (location, target_end_date) -> observation lookup DataFrame for all locations.
-
-    Deduplication: keep latest as_of revision per (location, target_end_date).
     Returns a DataFrame with columns [location, target_end_date, observation].
     """
     tgt_truth = truth[truth["target"] == target].copy()
@@ -230,7 +155,6 @@ def get_truth_lookup(truth: pd.DataFrame, target: str, loc_mapping: dict) -> pd.
 def load_submissions(forecast_dir: str) -> pd.DataFrame:
     """
     Load all *-UM-DeepOutbreak.csv files from forecast_dir.
-
     Returns combined raw quantile DataFrame.
     """
     pattern = os.path.join(forecast_dir, "*-UM-DeepOutbreak.csv")
@@ -264,9 +188,9 @@ def compute_metrics_for_group(df: pd.DataFrame) -> dict:
     Aggregate evaluation metrics for a group of row-level forecast-truth pairs.
 
     Expects df to have columns: truth, pred_median, q_0.05, q_0.95,
-                                 covered_90, abs_error, squared_error,
-                                 width_90, wis_row.
-    Rows with NaN inputs are excluded per metric (not globally).
+                                covered_90, abs_error, squared_error,
+                                width_90, wis_row.
+    Rows with nan inputs are excluded per metric (not globally).
     """
     n = len(df)
 
@@ -294,7 +218,7 @@ def compute_metrics_for_group(df: pd.DataFrame) -> dict:
         "wis": wis,
     }
 
-# Main
+# main
 def main():
     parser = argparse.ArgumentParser(
         description="Numeric evaluation metrics for UM-DeepOutbreak flu forecasts by horizon.",
