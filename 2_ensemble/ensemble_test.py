@@ -1,7 +1,5 @@
 """
-ensemble_test.py
-=======================
-Reference paper link: https://pmc.ncbi.nlm.nih.gov/articles/PMC11949510/
+Reference paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC11949510/
 Ensemble experiment for CDC FluSight 2025 RSV hospitalization forecasts.
 
 Loads prediction CSVs from base_pred/1/ through base_pred/8/ (8 seq2seq models,
@@ -32,8 +30,6 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.svm import SVR
 
-
-# Path setup
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # base_pred/2_ensemble/
 DATA_DIR   = os.path.dirname(SCRIPT_DIR)                  # base_pred/
 FOLDERS    = list(range(1, 9))
@@ -191,7 +187,7 @@ def evaluate(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-# 7. Main
+# main
 def main():
     print("=" * 60)
     print("Ensemble Experiment — RSV Hospitalization")
@@ -212,14 +208,14 @@ def main():
     print("\n[5] Stacking ensemble...")
     df = stacking_ensemble(df)
 
-    # Add baseline columns (folder 1 predictions)
+    # add baseline columns (folder 1 predictions)
     for h in HORIZONS:
         df[f"baseline_pred_{h}"] = df[f"model_1_pred_{h}"]
 
     print("\n[6] Evaluating...")
     eval_df = evaluate(df)
 
-    # Add improvement vs baseline columns
+    # add improvement vs baseline columns
     baseline_ref = (
         eval_df[eval_df["method"] == "baseline"][["split", "horizon", "mae", "rmse"]]
         .rename(columns={"mae": "baseline_mae", "rmse": "baseline_rmse"})
@@ -263,7 +259,7 @@ def main():
     method_order = ["baseline", "avg", "wae_mse", "wae_rmse", "lr_stack", "svr_stack"]
     overall = overall.set_index("method").loc[method_order].reset_index()
 
-    # Verdict
+    # verdict
     baseline_mae  = overall.loc[overall["method"] == "baseline", "avg_mae"].item()
     baseline_rmse = overall.loc[overall["method"] == "baseline", "avg_rmse"].item()
 
@@ -280,7 +276,7 @@ def main():
             f"{row['avg_rmse_vs_baseline']:>+10.2f} {rmse_tag}"
         )
 
-    # Save predictions CSV
+    # save predictions CSV
     pred_cols = (
         ["region", "epiweek", "is_test"]
         + [f"true_{h}"           for h in HORIZONS]

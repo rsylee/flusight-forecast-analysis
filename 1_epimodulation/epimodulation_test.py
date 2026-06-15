@@ -1,7 +1,5 @@
 """
-epimodulation_test.py
-====================================================
-Reference paper link: https://www.pnas.org/doi/epdf/10.1073/pnas.2508575122 
+Reference paper: https://www.pnas.org/doi/epdf/10.1073/pnas.2508575122 
 Applies a cumulative-prediction damping correction to existing base model forecasts
 and evaluates whether it improves MAE / RMSE vs the raw predictions.
 
@@ -21,16 +19,14 @@ import os
 import numpy as np
 import pandas as pd
 
-
-# Config
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FOLDERS = list(range(1, 9))          # folders 1–8
+FOLDERS = list(range(1, 9)) # folders 1–8
 HORIZONS = [1, 2, 3, 4]
-SENTINEL = -9                        # missing ground-truth marker in true_<h>
-THETA_GRID = np.linspace(0, 0.001, 500)   # scale-adjusted: cumulative sums are O(100–30000)
+SENTINEL = -9 # missing ground-truth marker in true_<h>
+THETA_GRID = np.linspace(0, 0.001, 500) # scale-adjusted: cumulative sums are O(100–30000)
 
 
-# Helpers
+# helper functions
 def load_folder(folder_id: int) -> pd.DataFrame:
     path = os.path.join(BASE_DIR, str(folder_id), f"{folder_id}.csv")
     df = pd.read_csv(path)
@@ -38,7 +34,6 @@ def load_folder(folder_id: int) -> pd.DataFrame:
     return df
 
 def compute_cumulative(df: pd.DataFrame) -> pd.DataFrame:
-    """Add C_h columns: cumulative sum of pred_1 .. pred_h for each row."""
     df = df.copy()
     for h in HORIZONS:
         # making cumulative Ch 
@@ -99,7 +94,7 @@ def estimate_theta(train_df: pd.DataFrame, h: int) -> float:
     return best_theta
 
 
-# Main evaluation
+# main evaluation
 def main():
     # 1. Load all folders
     frames = [load_folder(fid) for fid in FOLDERS]
