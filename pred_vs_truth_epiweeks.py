@@ -1,6 +1,4 @@
 """
-plot_pred_vs_truth_by_horizon_FINAL.py
-
 Generates evaluation plots for ALL locations.
 
 What this script does:
@@ -16,10 +14,6 @@ What this script does:
       - Bottom panel: truth vs predicted median + prediction interval; missed points shown
    B) Optional: Per-reference_date plot (horizons 1..4 together per submission week)
 
-Requirements:
-- pandas, numpy, matplotlib
-- epiweeks  -> install once:  python3 -m pip install epiweeks
-
 Outputs:
 - Saves plots into ./plots/by_location/{location_name}/
 """
@@ -31,74 +25,46 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from epiweeks import Week
 
-# User settings (edit here)
 TRUTH_PATH = "cdc_datafiles.csv"
 SUBMISSION_GLOB = "202[56]-??-??-UM-DeepOutbreak.csv"
-
 TARGET = "wk inc flu hosp"
-
-# Horizons to evaluate
 KEEP_HORIZONS = [0, 1, 2, 3, 4]
 PLOT_HORIZONS = [1, 2, 3, 4]
 
-# Plot output base directory (per-location subfolders created automatically)
+# plot output base directory (per-location subfolders created automatically)
 OUTDIR_BASE = os.path.join("plots", "by_location")
 
-# Optional additional plot: show horizons 1..4 together per reference_date
+# optional additional plot: show horizons 1..4 together per reference_date
 MAKE_PER_REFERENCE_PLOT = True
 MAX_REFERENCE_PLOTS = 12
-
-# Optional: limit to a time window (None = no limit)
+# optional: limit to a time window (None = no limit)
 START_DATE = None
 END_DATE = None
 
-# Helper functions
+# helper functions
 def zfill_loc(x) -> str:
-    """Ensure location codes are standardized to 2 digits (e.g., 1 -> '01')."""
     return str(x).zfill(2)
 
 def ensure_datetime(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Convert a column to datetime; invalid parses become NaT (missing)."""
     df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
 
 def ensure_numeric(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Convert a column to numeric; invalid parses become NaN (missing)."""
     df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 def compute_horizon(pred: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute forecast horizon (weeks ahead) using:
-        horizon = floor((target_end_date - reference_date) / 7)
-
-    Why:
-    - FluSight submissions are weekly, so 7 days per horizon step.
-    - horizon=1 means 1-week-ahead forecast, etc.
-    """
     delta_days = (pred["target_end_date"] - pred["reference_date"]).dt.days
     pred["horizon"] = (delta_days // 7).astype("Int64")
     return pred
 
 def epiweek_label(dt: pd.Timestamp) -> str:
-    """
-    Convert a date to an epiweek label like '2025-W46'.
-    This helps match CDC-style epidemiological week interpretation.
-    """
     if pd.isna(dt):
         return ""
     w = Week.fromdate(dt.date())
     return f"{w.year}-W{w.week:02d}"
 
 def choose_pi_bounds_from_columns(cols: set):
-    """
-    Choose which prediction interval (PI) to plot based on which quantiles exist.
-    Priority:
-    - 90% PI: 0.05–0.95
-    - 80% PI: 0.10–0.90
-    - 95% PI: 0.025–0.975
-    Returns: (low_q, high_q, target_coverage, label)
-    """
     if 0.05 in cols and 0.95 in cols:
         return 0.05, 0.95, 0.90, "90% Prediction Interval (0.05–0.95)"
     if 0.10 in cols and 0.90 in cols:
@@ -108,7 +74,6 @@ def choose_pi_bounds_from_columns(cols: set):
     return None, None, None, "No PI quantiles available"
 
 def apply_date_window(df: pd.DataFrame, col: str, start: str | None, end: str | None) -> pd.DataFrame:
-    """Optionally filter rows based on a date window [start, end]."""
     if start is not None:
         df = df[df[col] >= pd.to_datetime(start)]
     if end is not None:
@@ -116,12 +81,11 @@ def apply_date_window(df: pd.DataFrame, col: str, start: str | None, end: str | 
     return df
 
 
-# Plot helpers (operate on a single location's data)
+# plot helpers (operate on a single location's data)
 def plot_location(qwide, snap_truth, loc_code, loc_name, outdir):
-    """Generate per-horizon and per-reference-date plots for one location."""
     os.makedirs(outdir, exist_ok=True)
 
-    # --- 4A) Per-horizon plots ---
+    # 4A) Per-horizon plots
     for h in PLOT_HORIZONS:
         dfh = qwide[qwide["horizon"] == h].copy()
         dfh = dfh.sort_values("target_end_date").reset_index(drop=True)
@@ -199,7 +163,7 @@ def plot_location(qwide, snap_truth, loc_code, loc_name, outdir):
         plt.close()
         print(f"  [h={h}] Saved: {outpath}")
 
-    # --- 4B) Per-reference-date plots ---
+    # 4B) Per-reference-date plots
     if MAKE_PER_REFERENCE_PLOT:
         refs = sorted(qwide["reference_date"].dropna().unique())[-MAX_REFERENCE_PLOTS:]
         for ref in refs:
@@ -235,7 +199,7 @@ def plot_location(qwide, snap_truth, loc_code, loc_name, outdir):
             plt.close()
             print(f"  [ref={ref_str}] Saved: {outpath}")
 
-# Main
+# main
 def main():
     print("cwd:", os.getcwd())
 
@@ -256,7 +220,7 @@ def main():
     truth = ensure_datetime(truth, "target_end_date")
     truth = ensure_numeric(truth, "observation")
 
-    # Build location code -> name mapping from truth
+    # build location code -> name mapping from truth
     loc_mapping = (
         truth[["location", "location_name"]]
         .dropna()
@@ -299,7 +263,7 @@ def main():
         loc_name = loc_mapping.get(loc_code, loc_code)
         print(f"\n=== {loc_name} ({loc_code}) ===")
 
-        # Filter truth for this location
+        # filter truth for this location
         snap_truth = truth[
             (truth["target"] == TARGET) &
             (truth["location_name"] == loc_name)
@@ -318,13 +282,13 @@ def main():
         snap_truth = snap_truth.sort_values("target_end_date").set_index("target_end_date")
         snap_truth = apply_date_window(snap_truth.reset_index(), "target_end_date", START_DATE, END_DATE).set_index("target_end_date")
 
-        # Filter predictions for this location
+        # filter predictions for this location
         pred_loc = pred[pred["location"] == loc_code].copy()
         if pred_loc.empty:
             print(f"  No prediction data; skipping.")
             continue
 
-        # Pivot quantiles wide
+        # pivot quantiles wide
         qwide = (
             pred_loc.pivot_table(
                 index=["reference_date", "target_end_date", "horizon"],
@@ -343,7 +307,7 @@ def main():
         )
         qwide["epiweek"] = qwide["target_end_date"].apply(epiweek_label)
 
-        # Safe folder name (replace spaces/slashes)
+        # safe folder name (replace spaces/slashes)
         safe_name = loc_name.replace(" ", "_").replace("/", "_")
         outdir = os.path.join(OUTDIR_BASE, f"{loc_code}_{safe_name}")
 
