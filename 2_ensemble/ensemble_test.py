@@ -1,27 +1,17 @@
 """
+Run ensemble experiments for CDC FluSight RSV hospitalization forecasts.
 Reference paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC11949510/
-Ensemble experiment for CDC FluSight 2025 RSV hospitalization forecasts.
 
-Loads prediction CSVs from base_pred/1/ through base_pred/8/ (8 seq2seq models,
-all predicting nhsn_rsv_hosp across 13 regions × 15 epiweeks, 4 horizons ahead).
+This script loads predictions from 8 seq2seq models, combines them using several
+ensemble methods, evaluates MAE/RMSE against ground truth, and saves prediction
+and summary CSV files.
 
-Implements five ensemble strategies + a single-model baseline (folder 1):
-  - baseline  : folder 1 predictions (single model)
-  - avg       : simple mean of all 8 model predictions
-  - wae_mse   : weighted average using inverse-MSE weights (fit on train only)
-  - wae_rmse  : weighted average using inverse-RMSE weights (fit on train only)
-  - lr_stack  : stacked linear regression (fit on train only)
-  - svr_stack : stacked SVR; non-linear (fit on train only)
-
-SENTINEL = -9 marks rows with missing ground truth and is excluded from all
-metric calculations and model fitting.
-
-Outputs (saved to the same directory as this script, base_pred/2_ensemble/):
-  ensemble_predictions.csv  -- wide-format predictions for all rows
-  ensemble_summary.csv      -- test-set MAE / RMSE per method × horizon + improvement vs baseline
-  ensemble_overall.csv      -- per-method averages across horizons + improvement vs baseline
-
-Prints a verdict comparing avg and WAE against the baseline on average test MAE/RMSE.
+Methods:
+    - baseline
+    - average ensemble
+    - weighted average ensemble
+    - linear regression stacking
+    - SVR stacking
 """
 
 import os
@@ -30,8 +20,8 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.svm import SVR
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # base_pred/2_ensemble/
-DATA_DIR   = os.path.dirname(SCRIPT_DIR)                  # base_pred/
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) # base_pred/2_ensemble/
+DATA_DIR   = os.path.dirname(SCRIPT_DIR) # base_pred/
 FOLDERS    = list(range(1, 9))
 HORIZONS   = [1, 2, 3, 4]
 SENTINEL   = -9
@@ -110,7 +100,8 @@ def weighted_average_ensemble(merged: pd.DataFrame) -> pd.DataFrame:
         mse_errors, rmse_errors = [], []
         for m in FOLDERS: # for each horizon, we are chekcing which model are most accurate! (so folder loop inside horizo loop_)
             pred_train = df.loc[train_mask, f"model_{m}_pred_{h}"].values
-            mse_errors.append(mse(y_train, pred_train)) # comapre y_train (= ground truth) and pred_train (= model m's predictions)
+            mse_errors.append(mse(y_train, pred_train)) 
+            # comapre y_train (= ground truth) and pred_train (= model m's predictions)
             rmse_errors.append(rmse(y_train, pred_train))
 
         mse_errors  = np.array(mse_errors)

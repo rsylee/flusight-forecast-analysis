@@ -1,18 +1,10 @@
 """
+Apply epimodulation to RSV hospitalization forecasts.
 Reference paper: https://www.pnas.org/doi/epdf/10.1073/pnas.2508575122 
-Applies a cumulative-prediction damping correction to existing base model forecasts
-and evaluates whether it improves MAE / RMSE vs the raw predictions.
 
-- MAE: Aean Aboslute Error; how far are the predictions are from the actual values on average
-- RMSE: Root Mean Square Error; an error metirc that penalizes large prediction errors more heavily 
-(reduction in RMSE = decreases outlier and redues extreme forecasting mistakes)
-
-Method (per row, per horizon h):
-    C_h = sum(pred_1 ... pred_h)  # cumulative prediction up to horizon h
-    y_tilde_h = pred_h * exp(-theta_h * C_h)  # damped prediction
-
-theta_h is estimated separately per horizon via grid search on non-test rows,
-minimizing MAE (true_h vs y_tilde_h), excluding sentinel values (true == -9).
+This script applies a cumulative-prediction damping correction to base model
+forecasts, estimates horizon-specific theta values on training data, and
+evaluates whether the adjusted predictions improve MAE/RMSE on the test set.
 """
 
 import os
